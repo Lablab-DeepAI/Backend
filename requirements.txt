@@ -1,3 +1,6 @@
 Flask
 flask-cors
 pdfplumber
+numpy
+pandas
+scikit-learn
