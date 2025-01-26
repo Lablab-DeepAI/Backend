@@ -149,6 +149,8 @@ def recommend_based_on_bandwidth():
                 filtered_documents.append(doc)
             elif content_type == 'heavy_media' and content_length > 1500: 
                 filtered_documents.append(doc)
+        
+        return jsonify({'Documents': filtered_documents})
 
     except Exception as e:
         return jsonify({'error': str(e)}), 500
