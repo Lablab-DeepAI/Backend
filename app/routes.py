@@ -1,4 +1,5 @@
 from flask import Blueprint, request, jsonify, current_app
+from flask_restx import Api, Resource, fields
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 import pandas as pd
@@ -7,107 +8,109 @@ import pdfplumber
 from pptx import Presentation  # To handle PowerPoint files
 from app.chatbot import ask_groq
 
+# Initialize Flask Blueprint and API
 main = Blueprint('main', __name__)
+api = Api(main, version="1.0", title="File Processor API", description="API for uploading and querying files with AI support")
 
 # Dictionary to store uploaded content in memory
 uploaded_file_content = {}
 
 vectorizer = TfidfVectorizer(stop_words='english')
 
-@main.route('/upload', methods=['POST'])
-def upload_file():
-    """
-    Endpoint to upload a file (PDF, PPT, or TXT) and extract its content.
-    """
-    if 'file' not in request.files:
-        return jsonify({'error': 'No file part in the request'}), 400
+# Define request and response models for Swagger
+upload_model = api.model("UploadModel", {
+    "file": fields.String(required=True, description="The file to upload (PDF, PPTX, or TXT)")
+})
 
-    file = request.files['file']
-    if file.filename == '':
-        return jsonify({'error': 'No file selected'}), 400
+chat_model = api.model("ChatModel", {
+    "question": fields.String(required=True, description="The question to ask"),
+    "filename": fields.String(required=True, description="The filename of the uploaded document to query")
+})
 
-    # Check file extension
-    allowed_extensions = ['.pdf', '.pptx', '.txt']
-    file_ext = os.path.splitext(file.filename)[1].lower()
 
-    if file and file_ext in allowed_extensions:
-        upload_folder = current_app.config['UPLOAD_FOLDER']
-        os.makedirs(upload_folder, exist_ok=True)
-        filepath = os.path.join(upload_folder, file.filename)
-        file.save(filepath)
+@api.route('/upload')
+class UploadFile(Resource):
+    @api.doc(description="Endpoint to upload a file (PDF, PPTX, or TXT) and extract its content.")
+    @api.expect(upload_model, validate=False)
+    def post(self):
+        if 'file' not in request.files:
+            return jsonify({'error': 'No file part in the request'}), 400
+
+        file = request.files['file']
+        if file.filename == '':
+            return jsonify({'error': 'No file selected'}), 400
+
+        allowed_extensions = ['.pdf', '.pptx', '.txt']
+        file_ext = os.path.splitext(file.filename)[1].lower()
+
+        if file and file_ext in allowed_extensions:
+            upload_folder = current_app.config['UPLOAD_FOLDER']
+            os.makedirs(upload_folder, exist_ok=True)
+            filepath = os.path.join(upload_folder, file.filename)
+            file.save(filepath)
+
+            try:
+                if file_ext == '.pdf':
+                    with pdfplumber.open(filepath) as pdf:
+                        text = "\n".join([page.extract_text() for page in pdf.pages if page.extract_text()])
+                elif file_ext == '.pptx':
+                    ppt = Presentation(filepath)
+                    text = "\n".join([paragraph.text for slide in ppt.slides for shape in slide.shapes if hasattr(shape, "text_frame") for paragraph in shape.text_frame.paragraphs])
+                elif file_ext == '.txt':
+                    with open(filepath, 'r', encoding='utf-8') as txt_file:
+                        text = txt_file.read()
+
+                uploaded_file_content[file.filename] = text
+                return jsonify({'message': 'File uploaded successfully', 'filename': file.filename, 'content': text}), 200
+
+            except Exception as e:
+                return jsonify({'error': f"Failed to process the file: {str(e)}"}), 500
+
+        return jsonify({'error': f'Invalid file type, only {allowed_extensions} are allowed'}), 400
+
+
+@api.route('/chat')
+class Chat(Resource):
+    @api.doc(description="Endpoint to handle chatbot queries based on uploaded files.")
+    @api.expect(chat_model, validate=True)
+    def post(self):
+        data = request.json
+        question = data.get('question')
+        filename = data.get('filename')
+
+        if not question or not filename:
+            return jsonify({"error": "Both 'question' and 'filename' are required"}), 400
+
+        file_path = os.path.join(current_app.config['UPLOAD_FOLDER'], filename)
+        if not os.path.exists(file_path):
+            return jsonify({"error": f"File '{filename}' not found"}), 404
 
         try:
-            if file_ext == '.pdf':
-                # Extract text from PDF
-                with pdfplumber.open(filepath) as pdf:
-                    text = "\n".join([page.extract_text() for page in pdf.pages if page.extract_text()])
-            elif file_ext == '.pptx':
-                # Extract text from PPT
-                ppt = Presentation(filepath)
-                text = "\n".join([paragraph.text for slide in ppt.slides for shape in slide.shapes if hasattr(shape, "text_frame") for paragraph in shape.text_frame.paragraphs])
-            elif file_ext == '.txt':
-                # Extract text from TXT
-                with open(filepath, 'r', encoding='utf-8') as txt_file:
-                    text = txt_file.read()
+            if filename in uploaded_file_content:
+                content = uploaded_file_content[filename]
+            else:
+                file_ext = os.path.splitext(filename)[1].lower()
+                if file_ext == '.pdf':
+                    with pdfplumber.open(file_path) as pdf:
+                        content = "\n".join([page.extract_text() for page in pdf.pages if page.extract_text()])
+                elif file_ext == '.pptx':
+                    ppt = Presentation(file_path)
+                    content = "\n".join([paragraph.text for slide in ppt.slides for shape in slide.shapes if hasattr(shape, "text_frame") for paragraph in shape.text_frame.paragraphs])
+                elif file_ext == '.txt':
+                    with open(file_path, 'r', encoding='utf-8') as txt_file:
+                        content = txt_file.read()
+                else:
+                    return jsonify({'error': 'Unsupported file type'}), 400
 
-            # Store the content in memory for future use
-            uploaded_file_content[file.filename] = text
+            groq_response = ask_groq(question, content)
 
-            return jsonify({'message': 'File uploaded successfully', 'filename': file.filename, 'content':text}), 200
+            if "error" in groq_response:
+                return jsonify({"error": groq_response["error"]}), 500
+
+            return jsonify({
+                "answer": groq_response.get("answer"),
+                "confidence": groq_response.get("confidence")
+            })
 
         except Exception as e:
             return jsonify({'error': f"Failed to process the file: {str(e)}"}), 500
-
-    return jsonify({'error': f'Invalid file type, only {allowed_extensions} are allowed'}), 400
-
-
-@main.route('/chat', methods=['POST'])
-def chat():
-    """
-    Endpoint to handle chatbot queries.
-    Expects JSON input with 'question' and 'filename' keys.
-    """
-    data = request.json
-    question = data.get('question')
-    filename = data.get('filename')
-
-    if not question or not filename:
-        return jsonify({"error": "Both 'question' and 'filename' are required"}), 400
-
-    # Retrieve the content of the uploaded file from the file itself
-    file_path = os.path.join(current_app.config['UPLOAD_FOLDER'], filename)
-    if not os.path.exists(file_path):
-        return jsonify({"error": f"File '{filename}' not found"}), 404
-
-    try:
-        # Check if content is already in memory
-        if filename in uploaded_file_content:
-            content = uploaded_file_content[filename]
-        else:
-            # Reload content from the file if not in memory
-            file_ext = os.path.splitext(filename)[1].lower()
-            if file_ext == '.pdf':
-                with pdfplumber.open(file_path) as pdf:
-                    content = "\n".join([page.extract_text() for page in pdf.pages if page.extract_text()])
-            elif file_ext == '.pptx':
-                ppt = Presentation(file_path)
-                content = "\n".join([paragraph.text for slide in ppt.slides for shape in slide.shapes if hasattr(shape, "text_frame") for paragraph in shape.text_frame.paragraphs])
-            elif file_ext == '.txt':
-                with open(file_path, 'r', encoding='utf-8') as txt_file:
-                    content = txt_file.read()
-            else:
-                return jsonify({'error': 'Unsupported file type'}), 400
-
-        # Use the chatbot function to get an answer
-        groq_response = ask_groq(question, content)
-
-        if "error" in groq_response:
-            return jsonify({"error": groq_response["error"]}), 500
-
-        return jsonify({
-            "answer": groq_response.get("answer"),
-            "confidence": groq_response.get("confidence")
-        })
-
-    except Exception as e:
-        return jsonify({'error': f"Failed to process the file: {str(e)}"}), 500
