@@ -14,6 +14,10 @@ uploaded_file_content = {}
 
 vectorizer = TfidfVectorizer(stop_words='english')
 
+@main.route('/', methods=['GET'])
+def health_check():
+    return 'Server is running!'
+
 @main.route('/upload', methods=['POST'])
 def upload_file():
     """
@@ -111,3 +115,40 @@ def chat():
 
     except Exception as e:
         return jsonify({'error': f"Failed to process the file: {str(e)}"}), 500
+    
+def get_documents():
+    #get files from vector db
+    return ''
+
+
+# Endpoint to suggest educational content based on the user's bandwidth
+@main.route('/resources', methods=['POST'])
+def recommend_based_on_bandwidth():
+    try:
+        user_bandwidth = request.json['bandwidth'] 
+
+        if user_bandwidth <= 500: 
+            content_type = 'text'
+        elif user_bandwidth <= 2000:  
+            content_type = 'media'
+        else: 
+            content_type = 'heavy_media'
+
+        documents = get_documents()
+
+        # Filter documents based on content type (size or media)
+        filtered_documents = []
+        for doc in documents:
+            doc_id, title, content, vector = doc
+            content_length = len(content.split()) 
+
+            # Filter based on user bandwidth
+            if content_type == 'text' and content_length <= 500: 
+                filtered_documents.append(doc)
+            elif content_type == 'media' and content_length > 500 and content_length <= 1500:  
+                filtered_documents.append(doc)
+            elif content_type == 'heavy_media' and content_length > 1500: 
+                filtered_documents.append(doc)
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
