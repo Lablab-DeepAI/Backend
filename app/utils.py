@@ -2,7 +2,7 @@ import os
 import pdfplumber
 from pptx import Presentation
 
-def save_uploaded_file(file, folder_name):
+def save_uploaded_file(file):
     """
     Save a single uploaded file and extract text based on its type.
     """
@@ -10,7 +10,7 @@ def save_uploaded_file(file, folder_name):
         raise ValueError("No file provided")
 
     # Save the file in the upload folder
-    upload_folder = os.path.join('app/uploads', folder_name)
+    upload_folder = os.path.join('app/uploads')
     os.makedirs(upload_folder, exist_ok=True)
 
     file_path = os.path.join(upload_folder, file.filename)
