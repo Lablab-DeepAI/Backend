@@ -116,12 +116,15 @@ def chat():
     except Exception as e:
         return jsonify({'error': f"Failed to process the file: {str(e)}"}), 500
     
+
+def add_documents():
+    return ''
+
 def get_documents():
     #get files from vector db
     return ''
 
 
-# Endpoint to suggest educational content based on the user's bandwidth
 @main.route('/resources', methods=['POST'])
 def recommend_based_on_bandwidth():
     try:
@@ -144,13 +147,13 @@ def recommend_based_on_bandwidth():
 
             # Filter based on user bandwidth
             if content_type == 'text' and content_length <= 500: 
-                filtered_documents.append(doc)
+                filtered_documents.append({'name': title, 'url': f'/uploads/{doc_id}.txt'})
             elif content_type == 'media' and content_length > 500 and content_length <= 1500:  
-                filtered_documents.append(doc)
+                filtered_documents.append({'name': title, 'url': f'/uploads/{doc_id}.txt'})
             elif content_type == 'heavy_media' and content_length > 1500: 
-                filtered_documents.append(doc)
+                filtered_documents.append({'name': title, 'url': f'/uploads/{doc_id}.txt'})
         
-        return jsonify({'Documents': filtered_documents})
+        return jsonify(filtered_documents)
 
     except Exception as e:
         return jsonify({'error': str(e)}), 500
