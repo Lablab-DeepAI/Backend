@@ -1,3 +1,7 @@
 Flask
 flask-cors
 pdfplumber
+python-dotenv
+requests
+groq
+python-pptx
