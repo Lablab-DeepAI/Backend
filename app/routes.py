@@ -1,8 +1,6 @@
 from flask import Blueprint, request, jsonify, current_app
 from flask_restx import Api, Resource, fields
 from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.metrics.pairwise import cosine_similarity
-import pandas as pd
 import os
 import pdfplumber
 from pptx import Presentation  # To handle PowerPoint files
@@ -27,6 +25,7 @@ chat_model = api.model("ChatModel", {
     "filename": fields.String(required=True, description="The filename of the uploaded document to query")
 })
 
+
 @api.route('/chat')
 class Chat(Resource):
     @api.doc(description="Endpoint to handle chatbot queries based on uploaded files.")
@@ -43,35 +42,8 @@ class Chat(Resource):
         if not os.path.exists(file_path):
             return jsonify({"error": f"File '{filename}' not found"}), 404
 
-@main.route('/', methods=['GET'])
-def health_check():
-    return 'Server is running!'
-
-@main.route('/upload', methods=['POST'])
-def upload_file():
-    @api.doc(description="Endpoint to upload a file (PDF, PPTX, or TXT) and extract its content.")
-    @api.expect(upload_model, validate=False)
-    """
-    Endpoint to upload a file (PDF, PPT, or TXT) and extract its content.
-    """
-    if 'file' not in request.files:
-        return jsonify({'error': 'No file part in the request'}), 400
-
-    file = request.files['file']
-    if file.filename == '':
-        return jsonify({'error': 'No file selected'}), 400
-
-    # Check file extension
-    allowed_extensions = ['.pdf', '.pptx', '.txt']
-    file_ext = os.path.splitext(file.filename)[1].lower()
-
-    if file and file_ext in allowed_extensions:
-        upload_folder = current_app.config['UPLOAD_FOLDER']
-        os.makedirs(upload_folder, exist_ok=True)
-        filepath = os.path.join(upload_folder, file.filename)
-        file.save(filepath)
-
         try:
+            # Retrieve the content of the uploaded file
             if filename in uploaded_file_content:
                 content = uploaded_file_content[filename]
             else:
@@ -100,53 +72,87 @@ def upload_file():
 
         except Exception as e:
             return jsonify({'error': f"Failed to process the file: {str(e)}"}), 500
-        # Use the chatbot function to get an answer
-        groq_response = ask_groq(question, content)
-
-        if "error" in groq_response:
-            return jsonify({"error": groq_response["error"]}), 500
-
-        return jsonify({
-            "answer": groq_response.get("answer"),
-            "confidence": groq_response.get("confidence")
-        })
-
-    except Exception as e:
-        return jsonify({'error': f"Failed to process the file: {str(e)}"}), 500
-    
-def get_documents():
-    #get files from vector db
-    return ''
 
 
-# Endpoint to suggest educational content based on the user's bandwidth
+@main.route('/', methods=['GET'])
+def health_check():
+    return 'Server is running!'
+
+
+@main.route('/upload', methods=['POST'])
+@api.doc(description="Endpoint to upload a file (PDF, PPTX, or TXT) and extract its content.")
+@api.expect(upload_model, validate=False)
+def upload_file():
+    if 'file' not in request.files:
+        return jsonify({'error': 'No file part in the request'}), 400
+
+    file = request.files['file']
+    if file.filename == '':
+        return jsonify({'error': 'No file selected'}), 400
+
+    allowed_extensions = ['.pdf', '.pptx', '.txt']
+    file_ext = os.path.splitext(file.filename)[1].lower()
+
+    if file and file_ext in allowed_extensions:
+        upload_folder = current_app.config['UPLOAD_FOLDER']
+        os.makedirs(upload_folder, exist_ok=True)
+        filepath = os.path.join(upload_folder, file.filename)
+        file.save(filepath)
+
+        try:
+            if file_ext == '.pdf':
+                with pdfplumber.open(filepath) as pdf:
+                    text = "\n".join([page.extract_text() for page in pdf.pages if page.extract_text()])
+            elif file_ext == '.pptx':
+                ppt = Presentation(filepath)
+                text = "\n".join([paragraph.text for slide in ppt.slides for shape in slide.shapes if hasattr(shape, "text_frame") for paragraph in shape.text_frame.paragraphs])
+            elif file_ext == '.txt':
+                with open(filepath, 'r', encoding='utf-8') as txt_file:
+                    text = txt_file.read()
+
+            # Store the content in memory for future use
+            uploaded_file_content[file.filename] = text
+
+            return jsonify({'message': 'File uploaded successfully', 'filename': file.filename, 'content': text}), 200
+
+        except Exception as e:
+            return jsonify({'error': f"Failed to process the file: {str(e)}"}), 500
+
+    return jsonify({'error': f'Invalid file type, only {allowed_extensions} are allowed'}), 400
+
+
 @main.route('/resources', methods=['POST'])
 def recommend_based_on_bandwidth():
     try:
-        user_bandwidth = request.json['bandwidth'] 
+        user_bandwidth = request.json['bandwidth']
 
-        if user_bandwidth <= 500: 
+        if user_bandwidth <= 500:
             content_type = 'text'
-        elif user_bandwidth <= 2000:  
+        elif user_bandwidth <= 2000:
             content_type = 'media'
-        else: 
+        else:
             content_type = 'heavy_media'
 
         documents = get_documents()
 
-        # Filter documents based on content type (size or media)
         filtered_documents = []
         for doc in documents:
             doc_id, title, content, vector = doc
-            content_length = len(content.split()) 
+            content_length = len(content.split())
 
-            # Filter based on user bandwidth
-            if content_type == 'text' and content_length <= 500: 
+            if content_type == 'text' and content_length <= 500:
                 filtered_documents.append(doc)
-            elif content_type == 'media' and content_length > 500 and content_length <= 1500:  
+            elif content_type == 'media' and 500 < content_length <= 1500:
                 filtered_documents.append(doc)
-            elif content_type == 'heavy_media' and content_length > 1500: 
+            elif content_type == 'heavy_media' and content_length > 1500:
                 filtered_documents.append(doc)
+
+        return jsonify({'filtered_documents': filtered_documents}), 200
 
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+
+def get_documents():
+    # Stub: replace with actual implementation to get documents from vector DB
+    return []
